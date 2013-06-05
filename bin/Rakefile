@@ -97,6 +97,7 @@ end
 namespace :rrna do
 
   RRNA_DATA_DIR = ENV['RRNA_DATA_DIR'] || '../data/rrna'
+  CONF_DIR = ENV['CONF_DIR'] || '../conf'
 
 
   desc "build BLAST databases on the first n_samples for a given sample site"
@@ -181,7 +182,7 @@ namespace :rrna do
 
     # parse sample IDs from TSV sample ID map
     # linked from http://hmpdacc.org/micro_analysis/microbiome_analyses.php
-    sample_ids_url = "#{RRNA_DATA_DIR}/ppAll_V35_map.txt"
+    sample_ids_url = "#{CONF_DIR}/ppAll_V35_map.txt"
     file_list = CSV.new(File.open(sample_ids_url), { :headers => :first_row, :col_sep => "\t" })
       .select { |line| line[-3] == site_name.capitalize && line[5] != 'Unavailable' }
       .map { |line| "#{ftp_url}#{line[7]}.fsa.gz" }
