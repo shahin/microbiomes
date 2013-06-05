@@ -30,7 +30,7 @@ namespace :asm do
   ]) do |t|
 
     LOG.info "Building BLAST database for #{t.source} ..."
-    blast_path = ENV['BLAST_PATH'] || "../ncbi-blast-2.2.28+/bin/"
+    blast_path = ENV['BLAST_PATH']
     gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
     gen_blast_db_res = `#{gen_blast_db_cmd}`
 
@@ -123,7 +123,7 @@ namespace :rrna do
   ]) do |t|
 
     LOG.info "Building BLAST database for #{t.source} ..."
-    blast_path = ENV['BLAST_PATH'] || "../ncbi-blast-2.2.28+/bin/"
+    blast_path = ENV['BLAST_PATH']
     gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
     gen_blast_db_res = `#{gen_blast_db_cmd}`
 
