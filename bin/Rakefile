@@ -1,90 +1,192 @@
 require 'logger'
 
 LOG = Logger.new(STDOUT)
-DATA_DIR = ENV['DATA_DIR'] || '../data'
 
-desc "build BLAST databases on the first n_samples for a given HMASM site"
-task :convert, [:site_name,:n_samples] => [:download] do |t, args|
+namespace :asm do
 
-  fasta_files = FileList["#{DATA_DIR}/#{args[:site_name]}/*.fa"]
-  n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
+  ASM_DATA_DIR = ENV['ASM_DATA_DIR'] || '../data'
 
-  LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} files ..."
-  fasta_files.take(n_samples).each do |file_path|
+  desc "build BLAST databases on the first n_samples for a given HMASM site"
+  task :convert, [:site_name,:n_samples] => [:download] do |t, args|
 
-    target = file_path.ext('fa.nsq')
-    file target => file_path
-    Rake::Task[target].invoke
+    fasta_files = FileList["#{ASM_DATA_DIR}/#{args[:site_name]}/*.fa"]
+    n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
+
+    LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} files ..."
+    fasta_files.take(n_samples).each do |file_path|
+
+      target = file_path.ext('fa.nsq')
+      file target => file_path
+      Rake::Task[target].invoke
+
+    end
+
+  end
+
+
+  # build BLAST database from a FASTA file
+  rule( /\.fa\.nsq$/ => [ 
+    proc { |taskname| taskname.sub(/\.fa\.nsq$/,'.fa') } 
+  ]) do |t|
+
+    LOG.info "Building BLAST database for #{t.source} ..."
+    blast_path = ENV['BLAST_PATH'] || "../ncbi-blast-2.2.28+/bin/"
+    gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
+    gen_blast_db_res = `#{gen_blast_db_cmd}`
+
+  end
+
+
+  # download and unzip a FASTA file
+  rule( /\.fa$/ ) do |t|
+
+    zipped_path = t.name + '.bz2'
+    target_path, file_name = File.split(zipped_path)
+    base_dir, site_name = File.split(target_path)
+
+    LOG.info "Downloading #{file_name} ..."
+    curl_cmd = "curl --progress-bar ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/#{file_name} > #{zipped_path}"
+    curl_res = system(curl_cmd)
+    print "\n"
+
+    unzip_result = `bunzip2 #{zipped_path}`
+
+  end
+
+
+  desc "download assembly files in FASTA format"
+  task :download, [:site_name,:n_samples] do |t, args|
+
+    site_name = args[:site_name]
+    site_data_dir =  File.join(ASM_DATA_DIR,site_name)
+    directory site_data_dir
+
+    require 'uri'
+
+    file_list = get_file_list(site_name)
+    n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
+
+    LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} files ..."
+
+    file_list.take(n_samples).each_with_index do |url,idx|
+      file_name = File.basename(URI.parse(url).path)
+      target_path = File.join(ASM_DATA_DIR,site_name,file_name.ext(''))
+      file target_path => site_data_dir
+      Rake::Task[target_path].invoke
+    end
+
+  end
+
+
+  # get the list of read files available on the server
+  def get_file_list(site_name)
+
+    ftp_url = "ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/"
+
+    # get a file list from the FTP directory listing
+    LOG.info "Checking file list on FTP server at #{ftp_url} ..."
+    curl_res = `curl -l --progress-bar #{ftp_url}`
+    print "\n"
+
+    file_list = curl_res.split(/\n/).map { |f| "#{ftp_url}#{f}" }
 
   end
 
 end
 
+namespace :rrna do
 
-# build BLAST database from a FASTA file
-rule( /\.fa\.nsq$/ => [ 
-  proc { |taskname| taskname.sub(/\.fa\.nsq$/,'.fa') } 
-]) do |t|
-
-  LOG.info "Building BLAST database for #{t.source} ..."
-  blast_path = ENV['BLAST_PATH'] || "../ncbi-blast-2.2.28+/bin/"
-  gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
-  gen_blast_db_res = `#{gen_blast_db_cmd}`
-
-end
+  RRNA_DATA_DIR = ENV['RRNA_DATA_DIR'] || '../data/rrna'
 
 
-# download and unzip a FASTA file
-rule( /\.fa$/ ) do |t|
+  desc "build BLAST databases on the first n_samples for a given sample site"
+  task :convert, [:site_name,:n_samples] => [:download] do |t, args|
 
-  zipped_path = t.name + '.bz2'
-  target_path, file_name = File.split(zipped_path)
-  base_dir, site_name = File.split(target_path)
+    fasta_files = FileList["#{RRNA_DATA_DIR}/#{args[:site_name]}/*.fsa"]
+    n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
 
-  LOG.info "Downloading #{file_name} ..."
-  curl_cmd = "curl --progress-bar ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/#{file_name} > #{zipped_path}"
-  curl_res = system(curl_cmd)
-  print "\n"
+    LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} files ..."
+    fasta_files.take(n_samples).each do |file_path|
 
-  unzip_result = `bunzip2 #{zipped_path}`
+      target = file_path.ext('fsa.nsq')
+      file target => file_path
+      Rake::Task[target].invoke
 
-end
+    end
 
-
-desc "download assembly files from the server in FASTA format"
-task :download, [:site_name,:n_samples] do |t, args|
-
-  site_name = args[:site_name]
-  site_data_dir =  File.join(DATA_DIR,site_name)
-  directory site_data_dir
-
-  require 'uri'
-
-  file_list = get_file_list(site_name)
-  n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
-
-  LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} files ..."
-
-  file_list.take(n_samples).each_with_index do |url,idx|
-    file_name = File.basename(URI.parse(url).path)
-    target_path = File.join(DATA_DIR,site_name,file_name.ext(''))
-    file target_path => site_data_dir
-    Rake::Task[target_path].invoke
   end
 
-end
+
+  # build BLAST database from a FASTA file
+  rule( /\.fsa\.nsq$/ => [ 
+    proc { |taskname| taskname.sub(/\.fsa\.nsq$/,'.fsa') } 
+  ]) do |t|
+
+    LOG.info "Building BLAST database for #{t.source} ..."
+    blast_path = ENV['BLAST_PATH'] || "../ncbi-blast-2.2.28+/bin/"
+    gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
+    gen_blast_db_res = `#{gen_blast_db_cmd}`
+
+  end
 
 
-# get the list of read files available on the server
-def get_file_list(site_name)
+  # download and unzip a FASTA file
+  rule( /\.fsa$/ ) do |t|
 
-  ftp_url = "ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/"
+    zipped_path = t.name + '.gz'
+    target_path, file_name = File.split(zipped_path)
+    base_dir, site_name = File.split(target_path)
 
-  # get a file list from the FTP directory listing
-  LOG.info "Checking file list on FTP server at #{ftp_url} ..."
-  curl_res = `curl -l --progress-bar #{ftp_url}`
-  print "\n"
+    LOG.info "Downloading #{file_name} ..."
+    curl_cmd = "curl --progress-bar ftp://public-ftp.hmpdacc.org/HM16STR/by_sample/#{file_name} > #{zipped_path}"
+    curl_res = system(curl_cmd)
+    print "\n"
 
-  file_list = curl_res.split(/\n/).map { |f| "#{ftp_url}#{f}" }
+    unzip_result = `gunzip #{zipped_path}`
 
+  end
+
+
+  desc "download 16S rRNA trimmed reads in FASTA format"
+  task :download, [:site_name,:n_samples] do |t, args|
+
+    site_name = args[:site_name]
+    site_data_dir =  File.join(RRNA_DATA_DIR,site_name)
+    directory site_data_dir
+
+    require 'uri'
+
+    file_list = get_file_list(site_name)
+    n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
+
+    LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} files ..."
+
+    file_list.take(n_samples).each_with_index do |url,idx|
+      file_name = File.basename(URI.parse(url).path)
+      target_path = File.join(RRNA_DATA_DIR,site_name,file_name.ext(''))
+      puts target_path
+      file target_path => site_data_dir
+      Rake::Task[target_path].invoke
+    end
+
+  end
+
+  # get the list of read files available on the server
+  def get_file_list(site_name)
+
+    require 'csv'
+    require 'open-uri'
+
+    ftp_url = "ftp://public-ftp.hmpdacc.org/HM16STR/by_sample/"
+
+    # parse sample IDs from TSV sample ID map
+    # linked from http://hmpdacc.org/micro_analysis/microbiome_analyses.php
+    sample_ids_url = "#{RRNA_DATA_DIR}/ppAll_V35_map.txt"
+    file_list = CSV.new(File.open(sample_ids_url), { :headers => :first_row, :col_sep => "\t" })
+      .select { |line| line[-3] == site_name.capitalize && line[5] != 'Unavailable' }
+      .map { |line| "#{ftp_url}#{line[7]}.fsa.gz" }
+      .uniq
+
+  end
+  
 end
