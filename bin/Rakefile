@@ -1,87 +1,112 @@
 require 'logger'
+require 'uri'
 
 LOG = Logger.new(STDOUT)
 
-namespace :asm do
+CONF_DIR = ENV['CONF_DIR'] || '../conf'
+DATA_DIRS = {
+  'asm' => ENV['DATA_DIR'] ? "#{ENV['DATA_DIR']}/asm" : '../data/asm', 
+  'rrna' => ENV['DATA_DIR'] ? "#{ENV['DATA_DIR']}/rrna" : '../data/rrna'
+}
+FTP_BASE_URLS = {
+  'asm' => "ftp://public-ftp.hmpdacc.org/HMASM/PGAs",
+  'rrna' => "ftp://public-ftp.hmpdacc.org/HM16STR/by_sample"
+}
 
-  ASM_DATA_DIR = ENV['ASM_DATA_DIR'] || '../data'
+desc "build BLAST databases on the first n_samples for a given HMASM site"
+task :convert, [:sequence_type,:site_name,:n_samples] => [:download] do |t, args|
 
-  desc "build BLAST databases on the first n_samples for a given HMASM site"
-  task :convert, [:site_name,:n_samples] => [:download] do |t, args|
+  fasta_files = FileList["#{DATA_DIRS[args[:sequence_type]]}/#{args[:site_name]}/*.f*a"]
+  
+  n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
 
-    fasta_files = FileList["#{ASM_DATA_DIR}/#{args[:site_name]}/*.fa"]
-    n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
+  LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} downloaded files ..."
+  fasta_files.take(n_samples).each do |file_path|
 
-    LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} files ..."
-    fasta_files.take(n_samples).each do |file_path|
-
-      target = file_path.ext('fa.nsq')
-      file target => file_path
-      Rake::Task[target].invoke
-
-    end
-
-  end
-
-
-  # build BLAST database from a FASTA file
-  rule( /\.fa\.nsq$/ => [ 
-    proc { |taskname| taskname.sub(/\.fa\.nsq$/,'.fa') } 
-  ]) do |t|
-
-    LOG.info "Building BLAST database for #{t.source} ..."
-    blast_path = ENV['BLAST_PATH']
-    gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
-    gen_blast_db_res = `#{gen_blast_db_cmd}`
+    target = file_path.ext('fa.nsq')
+    file target => file_path
+    Rake::Task[target].invoke
 
   end
 
+end
 
-  # download and unzip a FASTA file
-  rule( /\.fa$/ ) do |t|
+# build BLAST database from a FASTA file
+rule( /\.fa\.nsq$/ => [ 
+  proc { |taskname| taskname.sub(/\.fa\.nsq$/,'.fa') } 
+]) do |t|
 
+  LOG.info "Building BLAST database for #{t.source} ..."
+  blast_path = ENV['BLAST_PATH']
+  gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
+  gen_blast_db_res = `#{gen_blast_db_cmd}`
+
+end
+
+# download and unzip a FASTA file
+rule( /\.f[s]*a$/ ) do |t|
+
+  target_path, file_name = File.split(t.name)
+  base_dir, site_name = File.split(target_path)
+  base_dir, sequence_type = File.split(base_dir)
+
+  case sequence_type
+  when 'asm'
+    decompressor = "bunzip2"
+    ftp_url = File.join(FTP_BASE_URLS['asm'],site_name,file_name) + ".bz2"
     zipped_path = t.name + '.bz2'
-    target_path, file_name = File.split(zipped_path)
-    base_dir, site_name = File.split(target_path)
-
-    LOG.info "Downloading #{file_name} ..."
-    curl_cmd = "curl --progress-bar ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/#{file_name} > #{zipped_path}"
-    curl_res = system(curl_cmd)
-    print "\n"
-
-    unzip_result = `bunzip2 #{zipped_path}`
-
+  when 'rrna'
+    decompressor = "gunzip"
+    ftp_url = File.join(FTP_BASE_URLS['rrna'],file_name) + ".gz"
+    zipped_path = t.name + '.gz'
+  else
+    raise "Unknown sequence type '#{sequence_type}' requested."
   end
 
+  LOG.info "Downloading #{file_name} ..."
+  curl_cmd = "curl --progress-bar #{ftp_url} > #{zipped_path}"
+  curl_res = system(curl_cmd)
+  print "\n"
 
-  desc "download assembly files in FASTA format"
-  task :download, [:site_name,:n_samples] do |t, args|
+  unzip_result = `#{decompressor} #{zipped_path}`
+  unzipped_path = zipped_path.ext('')
 
-    site_name = args[:site_name]
-    site_data_dir =  File.join(ASM_DATA_DIR,site_name)
-    directory site_data_dir
-
-    require 'uri'
-
-    file_list = get_file_list(site_name)
-    n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
-
-    LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} files ..."
-
-    file_list.take(n_samples).each_with_index do |url,idx|
-      file_name = File.basename(URI.parse(url).path)
-      target_path = File.join(ASM_DATA_DIR,site_name,file_name.ext(''))
-      file target_path => site_data_dir
-      Rake::Task[target_path].invoke
-    end
-
+  if unzipped_path =~ /\.fsa$/
+    rename_res = system("mv #{unzipped_path} #{unzipped_path.ext('fa')}")
   end
 
+end
 
-  # get the list of read files available on the server
-  def get_file_list(site_name)
+desc "download assembly files in FASTA format"
+task :download, [:sequence_type,:site_name,:n_samples] do |t, args|
 
-    ftp_url = "ftp://public-ftp.hmpdacc.org/HMASM/PGAs/#{site_name}/"
+  sequence_type = args[:sequence_type]
+  data_dir = DATA_DIRS[sequence_type]
+
+  site_name = args[:site_name]
+  site_data_dir = File.join(data_dir,site_name)
+  directory site_data_dir
+
+  file_list = get_file_list(sequence_type,site_name)
+  n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
+
+  LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} available files ..."
+
+  file_list.take(n_samples).each_with_index do |url,idx|
+    file_name = File.basename(URI.parse(url).path)
+    target_path = File.join(data_dir,site_name,file_name.ext(''))
+    file target_path => site_data_dir
+    Rake::Task[target_path].invoke
+  end
+
+end
+
+# get the list of assembly files available on the server
+def get_file_list(sequence_type,site_name)
+
+  case sequence_type
+  when 'asm'
+    ftp_url = "#{FTP_BASE_URLS['asm']}/#{site_name}/"
 
     # get a file list from the FTP directory listing
     LOG.info "Checking file list on FTP server at #{ftp_url} ..."
@@ -89,96 +114,9 @@ namespace :asm do
     print "\n"
 
     file_list = curl_res.split(/\n/).map { |f| "#{ftp_url}#{f}" }
-
-  end
-
-end
-
-namespace :rrna do
-
-  RRNA_DATA_DIR = ENV['RRNA_DATA_DIR'] || '../data/rrna'
-  CONF_DIR = ENV['CONF_DIR'] || '../conf'
-
-
-  desc "build BLAST databases on the first n_samples for a given sample site"
-  task :convert, [:site_name,:n_samples] => [:download] do |t, args|
-
-    fasta_files = FileList["#{RRNA_DATA_DIR}/#{args[:site_name]}/*.fsa"]
-    n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
-
-    LOG.info "Making sure we have a BLAST database for each of the first #{n_samples} of #{fasta_files.length} files ..."
-    fasta_files.take(n_samples).each do |file_path|
-
-      target = file_path.ext('fsa.nsq')
-      file target => file_path
-      Rake::Task[target].invoke
-
-    end
-
-  end
-
-
-  # build BLAST database from a FASTA file
-  rule( /\.fsa\.nsq$/ => [ 
-    proc { |taskname| taskname.sub(/\.fsa\.nsq$/,'.fsa') } 
-  ]) do |t|
-
-    LOG.info "Building BLAST database for #{t.source} ..."
-    blast_path = ENV['BLAST_PATH']
-    gen_blast_db_cmd = "#{blast_path}makeblastdb -in #{t.source} -dbtype nucl"
-    gen_blast_db_res = `#{gen_blast_db_cmd}`
-
-  end
-
-
-  # download and unzip a FASTA file
-  rule( /\.fsa$/ ) do |t|
-
-    zipped_path = t.name + '.gz'
-    target_path, file_name = File.split(zipped_path)
-    base_dir, site_name = File.split(target_path)
-
-    LOG.info "Downloading #{file_name} ..."
-    curl_cmd = "curl --progress-bar ftp://public-ftp.hmpdacc.org/HM16STR/by_sample/#{file_name} > #{zipped_path}"
-    curl_res = system(curl_cmd)
-    print "\n"
-
-    unzip_result = `gunzip #{zipped_path}`
-
-  end
-
-
-  desc "download 16S rRNA trimmed reads in FASTA format"
-  task :download, [:site_name,:n_samples] do |t, args|
-
-    site_name = args[:site_name]
-    site_data_dir =  File.join(RRNA_DATA_DIR,site_name)
-    directory site_data_dir
-
-    require 'uri'
-
-    file_list = get_file_list(site_name)
-    n_samples = args[:n_samples].nil? ? file_list.length : args[:n_samples].to_i
-
-    LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} files ..."
-
-    file_list.take(n_samples).each_with_index do |url,idx|
-      file_name = File.basename(URI.parse(url).path)
-      target_path = File.join(RRNA_DATA_DIR,site_name,file_name.ext(''))
-      puts target_path
-      file target_path => site_data_dir
-      Rake::Task[target_path].invoke
-    end
-
-  end
-
-  # get the list of read files available on the server
-  def get_file_list(site_name)
-
+  when 'rrna'
     require 'csv'
-    require 'open-uri'
-
-    ftp_url = "ftp://public-ftp.hmpdacc.org/HM16STR/by_sample/"
+    ftp_url = "#{FTP_BASE_URLS['rrna']}/"
 
     # parse sample IDs from TSV sample ID map
     # linked from http://hmpdacc.org/micro_analysis/microbiome_analyses.php
@@ -186,8 +124,12 @@ namespace :rrna do
     file_list = CSV.new(File.open(sample_ids_url), { :headers => :first_row, :col_sep => "\t" })
       .select { |line| line[-3] == site_name.capitalize && line[5] != 'Unavailable' }
       .map { |line| "#{ftp_url}#{line[7]}.fsa.gz" }
+      .sort
       .uniq
-
+  else
+    raise "Unknown sequence type '#{sequence_type}' requested."
   end
-  
+
+  file_list
+
 end
