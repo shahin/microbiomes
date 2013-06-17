@@ -4,6 +4,7 @@ require 'uri'
 LOG = Logger.new(STDOUT)
 
 CONF_DIR = ENV['CONF_DIR'] || '../conf'
+ANALYSIS_DIR = ENV['ANALYSIS_DIR'] || '../analysis'
 DATA_DIRS = {
   'asm' => ENV['DATA_DIR'] ? "#{ENV['DATA_DIR']}/asm" : '../data/asm', 
   'rrna' => ENV['DATA_DIR'] ? "#{ENV['DATA_DIR']}/rrna" : '../data/rrna'
@@ -13,10 +14,45 @@ FTP_BASE_URLS = {
   'rrna' => "ftp://public-ftp.hmpdacc.org/HM16STR/by_sample"
 }
 
-desc "build BLAST databases on the first n_samples for a given HMASM site"
+desc "For each nucleotide sequence in the first sample, find the closest match in the second"
+task :compare, [:sequence_type,:site_name,:n_samples] => [:convert] do |t, args|
+
+  sequence_type = args[:sequence_type]
+  site_name = args[:site_name]
+  n_samples = args[:n_samples].to_i
+  blastn_dbs = FileList["#{DATA_DIRS[sequence_type]}/#{site_name}/*.fa.nsq"]
+
+  directory ANALYSIS_DIR
+
+  blastn_dbs.take(n_samples).combination(2).to_a.each do |db_1,db_2|
+    sample_1_id = File.basename(db_1).split('.')[0]
+    sample_2_id = File.basename(db_2).split('.')[0]
+    target = File.join(ANALYSIS_DIR,"align_#{sequence_type}_#{site_name}_#{sample_1_id}_#{sample_2_id}.csv")
+    file target => [db_1,db_2]
+    Rake::Task[target].invoke
+  end
+  
+end
+
+# find the best alignments for one set of sequences (query) against another set (db)
+# alignment result format: align_#{sequence_type}_#{site_name}_#{query_sample}_#{db_sample}.csv
+rule( /align_.*\.csv$/ => [
+  proc do |taskname| 
+    run_params = File.basename(taskname).split(/[_.]/)
+    [ File.join(DATA_DIRS[run_params[1]],run_params[2],"#{run_params[3]}*.fa.nsq"), File.join(DATA_DIRS[run_params[1]],run_params[2],"#{run_params[4]}*.fa.nsq") ]
+  end
+]) do |t|
+  
+  blast_cmd = "blastn -query #{t.sources[0].ext('')} -db #{t.sources[1].ext('')} -evalue 1e-10  -outfmt '10' -max_target_seqs 1 > #{t.name}"
+  LOG.info "Running #{blast_cmd}..."
+  blast_res = system(blast_cmd)
+
+end
+
+desc "build BLAST databases on the first n_samples for a given sequence_type, site"
 task :convert, [:sequence_type,:site_name,:n_samples] => [:download] do |t, args|
 
-  fasta_files = FileList["#{DATA_DIRS[args[:sequence_type]]}/#{args[:site_name]}/*.f*a"]
+  fasta_files = FileList["#{DATA_DIRS[args[:sequence_type]]}/#{args[:site_name]}/*.fa"]
   
   n_samples = args[:n_samples].nil? ? fasta_files.length : args[:n_samples].to_i 
 
@@ -44,7 +80,7 @@ rule( /\.fa\.nsq$/ => [
 end
 
 # download and unzip a FASTA file
-rule( /\.f[s]*a$/ ) do |t|
+rule( /\.fa$/ ) do |t|
 
   target_path, file_name = File.split(t.name)
   base_dir, site_name = File.split(target_path)
@@ -53,27 +89,23 @@ rule( /\.f[s]*a$/ ) do |t|
   case sequence_type
   when 'asm'
     decompressor = "bunzip2"
-    ftp_url = File.join(FTP_BASE_URLS['asm'],site_name,file_name) + ".bz2"
+    ftp_url = File.join(FTP_BASE_URLS['asm'],site_name,file_name).ext('.fa.bz2')
     zipped_path = t.name + '.bz2'
   when 'rrna'
     decompressor = "gunzip"
-    ftp_url = File.join(FTP_BASE_URLS['rrna'],file_name) + ".gz"
+    ftp_url = File.join(FTP_BASE_URLS['rrna'],file_name).ext('.fsa.gz')
     zipped_path = t.name + '.gz'
   else
     raise "Unknown sequence type '#{sequence_type}' requested."
   end
 
-  LOG.info "Downloading #{file_name} ..."
+  LOG.info "Downloading #{ftp_url} ..."
   curl_cmd = "curl --progress-bar #{ftp_url} > #{zipped_path}"
   curl_res = system(curl_cmd)
   print "\n"
 
   unzip_result = `#{decompressor} #{zipped_path}`
   unzipped_path = zipped_path.ext('')
-
-  if unzipped_path =~ /\.fsa$/
-    rename_res = system("mv #{unzipped_path} #{unzipped_path.ext('fa')}")
-  end
 
 end
 
@@ -92,6 +124,7 @@ task :download, [:sequence_type,:site_name,:n_samples] do |t, args|
 
   LOG.info "Making sure we have the first #{n_samples} of #{file_list.length} available files ..."
 
+  # get file name, remove compression extension, standardize name
   file_list.take(n_samples).each_with_index do |url,idx|
     file_name = File.basename(URI.parse(url).path)
     target_path = File.join(data_dir,site_name,file_name.ext(''))
