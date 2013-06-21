@@ -14,6 +14,14 @@ FTP_BASE_URLS = {
   'rrna' => "ftp://public-ftp.hmpdacc.org/HM16STR/by_sample"
 }
 
+def build_filename(sequence_type,sample_id)
+  if sequence_type == 'asm'
+    "#{sample_id}.scaffold.fa"
+  elsif sequence_type == 'rrna'
+    "#{sample_id}.fa"
+  end
+end
+
 desc "For each nucleotide sequence in the first sample, find the closest match in the second"
 task :compare, [:sequence_type,:site_name,:n_samples] => [:convert] do |t, args|
 
@@ -39,7 +47,8 @@ end
 rule( /align_.*\.csv$/ => [
   proc do |taskname| 
     run_params = File.basename(taskname).split(/[_.]/)
-    [ File.join(DATA_DIRS[run_params[1]],run_params[2],"#{run_params[3]}*.fa.nsq"), File.join(DATA_DIRS[run_params[1]],run_params[2],"#{run_params[4]}*.fa.nsq") ]
+    [ File.join(DATA_DIRS[run_params[1]],run_params[2],"#{build_filename(run_params[1],run_params[3])}.nsq"), 
+      File.join(DATA_DIRS[run_params[1]],run_params[2],"#{build_filename(run_params[1],run_params[4])}.nsq") ]
   end
 ]) do |t|
   
